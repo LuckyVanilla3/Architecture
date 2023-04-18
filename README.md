@@ -9,5 +9,5 @@ yum install -y httpd
 systemctl enable httpd.service
 systemctl start httpd
 cd /var/www/html
-echo "<h1>Hello Lucky Vanilla 3</h1><h2>This is First Instance</h2>" > index.html
+echo "<h1>Hello Lucky Vanilla 3</h1><h2>Working very well. Good luck</h2>" > index.html
 ```
