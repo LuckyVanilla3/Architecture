@@ -11,3 +11,8 @@ systemctl start nginx
 cd /usr/share/nginx/html
 echo "<center><h1>Hello Lucky Vanilla 3</h1><h2>This is Lucky Vanilla 3's shopping mall. </h2><h3>Working very well. Good luck</h3></center>" > index.html
 ```
+
+Make Heavy CPU utilization
+```
+while true;do true;done
+```
