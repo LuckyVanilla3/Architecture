@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'RDS, ALB, Autoscaling'
+Parameters:
+  VPCStackName:
+    Description: Name of VPC Cloudformation Stack
+    Type: String
+    Default: lucky
+  RoleStackName:
+    Description: Name of Role Cloudformation Stack
+    Type: String
+    Default: luckyrole
+
+  LatestAmiId:
+    Description: Region specific image from the Parameter Store
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+  InstanceType:
+    Description: Amazon EC2 instance type for the instances
+    Type: String
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+    Default: t3.micro  
+
+  DBName:
+    Type: String
+    Default: LuckyDB
+
+  DBUsername:
+    Type: String
+    Default: dbadmin
+
+  DBPassword:
+    Type: String
+    Default: password
+    NoEcho: True
+  
+Resources:
+################################################################################################
+# Application Load Balancer
+################################################################################################
+
+  ALBTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub "${VPCStackName}-VPCID"
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 60
+      HealthCheckTimeoutSeconds: 50
+      HealthyThresholdCount: 2
+      Name: !Sub "${VPCStackName}-ALB-TG"
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      UnhealthyThresholdCount: 10
+
+  ApplicationLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+        - Fn::ImportValue: !Sub "${VPCStackName}-PublicSubnet01ID"
+        - Fn::ImportValue: !Sub "${VPCStackName}-PublicSubnet02ID"
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${VPCStackName}-ALB-SG"
+      Name: !Sub "${VPCStackName}-ALB"
+
+  ALBListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+################################################################################################
+# AutoScaling
+################################################################################################
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${VPCStackName}-Launch-Template
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId  
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile: 
+          Name: !Sub "${RoleStackName}-EC2Profile"
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${VPCStackName}-WEB-SG"
+        UserData:
+          Fn::Base64:
+            !Sub |
+                #!/bin/bash
+                yum -y install httpd
+                systemctl enable httpd
+                systemctl start httpd
+                echo '<html><h1>Hello From Your Web Server!</h1></html>' > /var/www/html/index.html 
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      AutoScalingGroupName: !Sub ${VPCStackName}-WEB-ASG
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${VPCStackName}-PrivateSubnet01ID"
+        - Fn::ImportValue: !Sub "${VPCStackName}-PrivateSubnet02ID"
+      MaxSize: 4
+      MinSize: 2
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${VPCStackName}-WEB-ASG
+          PropagateAtLaunch: true
+
+  ASGPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60
+
+
+ ################################################################################################
+# DB Subnet Group
+################################################################################################
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${VPCStackName}-DB-Subnet-Group
+      DBSubnetGroupName: !Sub ${VPCStackName}-DB-Subnet-Group
+      SubnetIds:
+        - Fn::ImportValue: !Sub "${VPCStackName}-PrivateSubnet01ID"
+        - Fn::ImportValue: !Sub "${VPCStackName}-PrivateSubnet02ID"
+      Tags:
+        - Key: Name
+          Value: !Sub ${VPCStackName}-DBSubnetGroup
+################################################################################################
+  # RDS Database
+################################################################################################
+
+  RDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "${DBName}-DB"
+      DBName: !Ref DBName
+      DBInstanceClass: db.t3.micro
+      Engine: MySQL
+      EngineVersion: 8.0.33
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: 5
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub "${VPCStackName}-DB-SG"
+      Tags:
+        - Key: Name
+          Value: !Sub "${VPCStackName}-DB"

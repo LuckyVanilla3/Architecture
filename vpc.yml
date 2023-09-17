@@ -1,0 +1,478 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon VPC - 2 AZ, Private 2 subnets, Public 2 subnets, 1 IGW, 2 NATGateways, Public RT, 2 Private RT, Security Group for ControlPlane '
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "VPC Configuration"
+        Parameters:
+          - VPCBlock
+          - PublicSubnet01Block
+          - PublicSubnet02Block
+          - PrivateSubnet01Block
+          - PrivateSubnet02Block
+          - AvailabilityZoneA
+          - AvailabilityZoneB
+
+Parameters:
+  VPCBlock:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: The CIDR range for the VPC. This should be a valid private (RFC 1918) CIDR range.
+
+  AvailabilityZoneA:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: "ap-northeast-2a"
+    Description: "Choose AZ1 for your VPC."
+
+  AvailabilityZoneB:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: "ap-northeast-2b"
+    Description: "Choose AZ2 for your VPC."
+  
+  PublicSubnet01Block:
+    Type: String
+    Default: 10.0.0.0/20
+    Description: CidrBlock for public subnet 01 within the VPC  
+  
+  PublicSubnet02Block:
+    Type: String
+    Default: 10.0.16.0/20
+    Description: CidrBlock for public subnet 02 within the VPC
+
+  PrivateSubnet01Block:
+    Type: String
+    Default: 10.0.128.0/20
+    Description: CidrBlock for private subnet 01 within the VPC
+
+  PrivateSubnet02Block:
+    Type: String
+    Default: 10.0.144.0/20
+    Description: CidrBlock for private subnet 02 within the VPC
+
+#####################
+# Create-VPC : VPC #
+#####################
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-VPC'
+
+########################################################
+# Create-InternetGateway: 
+########################################################
+
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-IGW'
+
+########################################################
+# Attach - VPC Gateway 
+########################################################
+
+  VPCGatewayAttachment:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC        
+
+########################################################
+# Create-Public-Subnet: PublicSubnet01,02
+########################################################
+
+  PublicSubnet01:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Public Subnet 01
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet01Block
+      AvailabilityZone: !Ref AvailabilityZoneA
+      MapPublicIpOnLaunch: "true"
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-Pub 1"
+      
+  PublicSubnet02:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Public Subnet 02
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet02Block
+      AvailabilityZone: !Ref AvailabilityZoneB
+      MapPublicIpOnLaunch: "true"
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-Pub 2"
+      
+#####################################################################
+# Create-Public-RouteTable:
+#####################################################################
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-Pub-RT"
+      
+
+################################################################################################
+# Associate-Public-RouteTable: VPC_Private_Subnet_a,b Accsociate VPC_Private_RouteTable #
+################################################################################################
+  PublicSubnet01RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet01
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet02
+      RouteTableId: !Ref PublicRouteTable
+
+################################################################################################
+# Create Public Routing Table
+################################################################################################
+  PublicRoute:
+    DependsOn: VPCGatewayAttachment
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+################################################################################################
+# Create-NATGateway: NATGATEWAY01,02
+################################################################################################
+  NatGateway01:
+    DependsOn:
+    - NatGatewayEIP1
+    - PublicSubnet01
+    - VPCGatewayAttachment
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt "NatGatewayEIP1.AllocationId"
+      SubnetId: !Ref PublicSubnet01
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-NAW1"
+
+  NatGatewayEIP1:
+    DependsOn:
+    - VPCGatewayAttachment
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-EIP1"
+
+  NatGateway02:
+    DependsOn:
+    - NatGatewayEIP2
+    - PublicSubnet02
+    - VPCGatewayAttachment
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt "NatGatewayEIP2.AllocationId"
+      SubnetId: !Ref PublicSubnet01
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-NAW2"
+
+  NatGatewayEIP2:
+    DependsOn:
+    - VPCGatewayAttachment
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-EIP2"
+
+########################################################
+# Create-Private-Subnet: PrivateSubnet01,02
+########################################################
+
+  PrivateSubnet01:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private Subnet 01
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet01Block
+      AvailabilityZone: !Ref AvailabilityZoneA
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-Pri 1"
+
+  PrivateSubnet02:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private Subnet 02
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet02Block
+      AvailabilityZone: !Ref AvailabilityZoneB
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-Pri 2"
+
+
+#####################################################################
+# Create-Private-RouteTable: PrivateRT01,02
+#####################################################################
+  PrivateRouteTable01:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-Pri-RT 1"
+      
+  PrivateRouteTable02:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "${AWS::StackName}-Pri-RT 2"
+      
+    
+################################################################################################
+# Associate-Private-RouteTable: VPC_Private_Subnet_a,b Accsociate VPC_Private_RouteTable #
+################################################################################################
+
+  PrivateSubnet01RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet01
+      RouteTableId: !Ref PrivateRouteTable01
+
+  PrivateSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet02
+      RouteTableId: !Ref PrivateRouteTable02
+
+
+################################################################################################
+# Create Prviate Routing Table
+################################################################################################
+
+  PrivateRoute01:
+    DependsOn:
+    - VPCGatewayAttachment
+    - NatGateway01
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable01
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway01
+
+  PrivateRoute02:
+    DependsOn:
+    - VPCGatewayAttachment
+    - NatGateway02
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable02
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway02
+  
+########################################################
+# ALB Security Group
+########################################################
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP/S access via port 80,443
+      GroupName: !Sub '${AWS::StackName}-ALB-SG'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: 443
+          ToPort: 443
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ALB-SG'
+
+########################################################
+# Web Security Group
+########################################################
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: ALBSecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access via port 80 and SSH access via port 22
+      GroupName: !Sub '${AWS::StackName}-WEB-SG'
+      VpcId:
+        !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/8
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !GetAtt ALBSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !GetAtt ALBSecurityGroup.GroupId  
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-WEB-SG'
+
+########################################################
+# App Security Group
+########################################################
+
+  APPSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: WebSecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP/S access via port 80,443
+      GroupName: !Sub '${AWS::StackName}-APP-SG'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/8
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !GetAtt WebSecurityGroup.GroupId
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !GetAtt WebSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-APP-SG'
+########################################################
+# DB Security Group
+########################################################
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-DB-SG'
+      GroupDescription: Enable access to MySQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !GetAtt APPSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-DB-SG'
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCID"
+  
+  PublicSubnet01ID:
+    Description: The Public Subnet01 ID to use for public web servers
+    Value: !Ref PublicSubnet01
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet01ID"
+  
+  PublicSubnet02ID:
+    Description: The Public Subnet02 ID to use for public web servers
+    Value: !Ref PublicSubnet02
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet02ID"
+  
+  PrivateSubnet01ID:
+    Description: The Private Subnet01 ID to use for Private App servers
+    Value: !Ref PrivateSubnet01
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet01ID"
+  
+  PrivateSubnet02ID:
+    Description: The Private Subnet02 ID to use for Private App servers
+    Value: !Ref PrivateSubnet02
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet02ID"
+        
+  ALBSecurityGroupID:
+    Description: The security group ID to use for ALB
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-ALB-SG"
+
+  WEBSecurityGroupID:
+    Description: The security group ID to use for WEB
+    Value: !Ref WebSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-WEB-SG"
+
+  APPSecurityGroupID:
+    Description: The security group ID to use for APP
+    Value: !Ref APPSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-APP-SG"
+
+  DBSecurityGroupID:
+    Description: The security group ID to use for DB
+    Value: !Ref DBSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-DB-SG"
+
+
+  # APPSecurityGroupID:
+  #   Description: The security group ID to use for APP
+  #   Value:
+  #     Ref: APPSecurityGroup
+  #   Export:
+  #     Name:
+  #       Fn::Sub: "${AWS::StackName}-APP-SG"
+  
+  # APPSecurityGroupID:
+  #   Description: The security group ID to use for APP
+  #   Value:
+  #     Fn::GetAtt:
+  #     - APPSecurityGroup
+  #     - GroupId
+  #   Export:
+  #     Name:
+  #       Fn::Sub: "${AWS::StackName}-APP-SG"
+
+  # APPSecurityGroupID02:
+  #   Description: The security group ID to use for APP
+  #   Value: !GetAtt APPSecurityGroup.GroupId
+  #   Export:
+  #     Name:
+  #       Fn::Sub: "${AWS::StackName}-APP-SG02"
+
+
