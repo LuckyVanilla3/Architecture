@@ -1,0 +1,6 @@
+Resources:
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+        ImageId: ami-091aca13f89c7964e
+        InstanceType: t3.micro
